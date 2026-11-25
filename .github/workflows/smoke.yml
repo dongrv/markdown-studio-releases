@@ -6,6 +6,10 @@ on:
         description: Successful build workflow run ID
         required: true
         type: string
+      version:
+        description: Expected product version
+        required: true
+        type: string
 permissions:
   actions: read
   contents: read
@@ -13,6 +17,8 @@ jobs:
   smoke:
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      STUDIO_EXPECTED_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
