@@ -1,4 +1,4 @@
-name: Verify Windows preview installer
+name: Verify preview installers
 on:
   workflow_dispatch:
     inputs:
@@ -51,12 +51,42 @@ jobs:
               if ($app.HasExited) { throw "Installed application exited: $($app.ExitCode)" }
               if ($app.MainWindowHandle -ne [IntPtr]::Zero) {
                 $root = [System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
-                if ($null -ne $root -and $null -ne $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)) { $found = $true; break }
+                if ($null -ne $root) {
+                  $button = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+                  if ($null -ne $button -and $button.Current.IsEnabled) { $found = $true; break }
+                }
               }
               Start-Sleep -Seconds 1
             }
             if (-not $found) { throw 'Installed application version control did not appear in the Windows accessibility tree' }
             Write-Output "Installed application started and displayed version $env:STUDIO_EXPECTED_VERSION"
+            $pattern = $null
+            if (-not $button.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref] $pattern)) { throw 'Update check button is not invokable' }
+            $pattern.Invoke()
+            $success = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '当前已是最新版本')
+            $deadline = (Get-Date).AddSeconds(30)
+            $checked = $false
+            while ((Get-Date) -lt $deadline) {
+              if ($null -ne $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $success)) { $checked = $true; break }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $checked) { throw 'Installed application did not confirm the live signed update policy' }
+            Write-Output 'Installed application verified the live signed update policy'
           } finally {
             if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
           }
+  anonymous-downloads:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      STUDIO_EXPECTED_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Download and verify published installers without authentication
+        shell: bash
+        run: |
+          set -eu
+          [[ "$STUDIO_EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          base="https://github.com/dongrv/markdown-studio-releases/releases/download/v${STUDIO_EXPECTED_VERSION}"
+          files=("SHA256SUMS.txt" "Markdown-Studio_${STUDIO_EXPECTED_VERSION}_Windows_x64-setup.exe" "Markdown-Studio_${STUDIO_EXPECTED_VERSION}_macOS_arm64.dmg" "Markdown-Studio_${STUDIO_EXPECTED_VERSION}_macOS_x64.dmg")
+          for file in "${files[@]}"; do curl --fail --location --silent --show-error --retry 3 -o "$file" "$base/$file"; done
+          sha256sum --check SHA256SUMS.txt
