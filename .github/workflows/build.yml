@@ -1,0 +1,83 @@
+name: Build Markdown Studio preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full immutable source commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            bundle: nsis
+            extension: exe
+          - os: macos-latest
+            platform: macos-arm64
+            bundle: dmg
+            extension: dmg
+          - os: macos-15-intel
+            platform: macos-x64
+            bundle: dmg
+            extension: dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/build-target
+      SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - name: Validate source revision
+        shell: bash
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Checkout private source at the requested revision
+        uses: actions/checkout@v4
+        with:
+          repository: dongrv/wechat-md
+          ref: ${{ inputs.source_sha }}
+          ssh-key: ${{ secrets.STUDIO_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+          path: source
+      - name: Verify revision
+        shell: bash
+        working-directory: source
+        run: 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"'
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies, test, and build installer
+        shell: bash
+        working-directory: source/studio
+        run: |
+          set -e
+          run_checked() {
+            label="$1"; shift
+            if ! "$@" > "$RUNNER_TEMP/studio-build.log" 2>&1; then
+              echo "::error::$label failed; see local reproduction steps in the source repository."
+              grep -E '^error(:|\[)' "$RUNNER_TEMP/studio-build.log" | head -10 || true
+              exit 1
+            fi
+            echo "$label passed"
+          }
+          run_checked "Install dependencies" npm ci
+          run_checked "Version consistency" npm run check:version
+          run_checked "Frontend tests" npm test
+          run_checked "Frontend build" npm run build
+          run_checked "Desktop Rust tests" cargo test --locked --manifest-path src-tauri/Cargo.toml
+          run_checked "Build installer" npx --yes @tauri-apps/cli@2.12.6 build --ci --bundles "${{ matrix.bundle }}" -- --locked
+      - name: Upload installer only
+        uses: actions/upload-artifact@v4
+        with:
+          name: markdown-studio-${{ matrix.platform }}
+          path: build-target/release/bundle/${{ matrix.bundle }}/*.${{ matrix.extension }}
+          if-no-files-found: error
+          retention-days: 5
