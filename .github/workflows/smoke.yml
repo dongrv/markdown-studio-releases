@@ -21,9 +21,6 @@ jobs:
       STUDIO_EXPECTED_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
       - uses: actions/download-artifact@v4
         with:
           name: markdown-studio-windows-x64
@@ -40,5 +37,26 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
           $executable = @(Get-ChildItem -LiteralPath $destination -Filter 'markdown-studio.exe' -Recurse)
           if ($executable.Count -ne 1) { throw 'Installed application not found' }
-          node .github/workflows/studio-release-smoke.mjs $executable[0].FullName
-          if ($LASTEXITCODE -ne 0) { throw 'Installed application smoke test failed' }
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--force-renderer-accessibility'
+          $app = Start-Process -FilePath $executable[0].FullName -WindowStyle Hidden -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(60)
+            $versionLabel = "v$env:STUDIO_EXPECTED_VERSION · 检查更新"
+            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $versionLabel)
+            $found = $false
+            while ((Get-Date) -lt $deadline) {
+              $app.Refresh()
+              if ($app.HasExited) { throw "Installed application exited: $($app.ExitCode)" }
+              if ($app.MainWindowHandle -ne [IntPtr]::Zero) {
+                $root = [System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
+                if ($null -ne $root -and $null -ne $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)) { $found = $true; break }
+              }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $found) { throw 'Installed application version control did not appear in the Windows accessibility tree' }
+            Write-Output "Installed application started and displayed version $env:STUDIO_EXPECTED_VERSION"
+          } finally {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
