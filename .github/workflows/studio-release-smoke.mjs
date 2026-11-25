@@ -5,7 +5,9 @@ import net from "node:net";
 import path from "node:path";
 
 const executable = process.argv[2];
+const expectedVersion = process.env.STUDIO_EXPECTED_VERSION;
 if (!executable) throw new Error("Expected installed executable");
+if (!/^\d+\.\d+\.\d+$/.test(expectedVersion || "")) throw new Error("Expected a valid product version");
 const port = await new Promise((resolve, reject) => {
   const socket = net.createServer(); socket.on("error", reject);
   socket.listen(0, "127.0.0.1", () => { const selected = socket.address().port; socket.close(() => resolve(selected)); });
@@ -45,7 +47,7 @@ try {
       return { version, theme: themes.some(t => t.id === 'studio-international'), rendered: output.html.includes('正文内容') };
     })()` } }));
   });
-  assert.deepEqual(result, { version: "0.1.0", theme: true, rendered: true });
+  assert.deepEqual(result, { version: expectedVersion, theme: true, rendered: true });
   console.log("Installed Windows application: startup, version, theme, and rendering passed");
 } finally {
   if (socket) socket.close();
